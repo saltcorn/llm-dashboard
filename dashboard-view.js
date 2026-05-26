@@ -382,16 +382,6 @@ Call create_dashboard_layout with an appropriate arrangement.`;
     },
   });
 
-const ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js";
-const ECSTAT_CDN =
-  "https://cdn.jsdelivr.net/npm/echarts-stat/dist/ecStat.min.js";
-// const ECHARTS_CDN = `/plugins/public/llm-dashboard@${
-//   require("./package.json").version
-// }/echarts.min.js`;
-// const ECSTAT_CDN = `/plugins/public/llm-dashboard@${
-//   require("./package.json").version
-// }/ecStat.min.js`;
-
 const run = async (table_id, viewname, cfg, state, { req }) => {
   const { elements, layout } = cfg || {};
 
@@ -414,14 +404,7 @@ const run = async (table_id, viewname, cfg, state, { req }) => {
     }
   }
 
-  return (
-    script({ src: ECHARTS_CDN }) +
-    script({ src: ECSTAT_CDN }) +
-    div(
-      { class: "llm-dashboard container-fluid" },
-      renderLayout(layout, elementMap),
-    )
-  );
+  return div({ class: "container-fluid" }, renderLayout(layout, elementMap));
 };
 
 module.exports = {
