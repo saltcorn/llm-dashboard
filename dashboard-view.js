@@ -1,32 +1,9 @@
 const Workflow = require("@saltcorn/data/models/workflow");
 const Form = require("@saltcorn/data/models/form");
 const Table = require("@saltcorn/data/models/table");
+const View = require("@saltcorn/data/models/view");
 const { getState } = require("@saltcorn/data/db/state");
 const { div, script, domReady, h6 } = require("@saltcorn/markup/tags");
-
-const statToAggregate = (statistic) => (statistic || "Count").toLowerCase();
-
-const isCountStat = (statistic) => !statistic || statistic === "Count";
-
-const loadPieData = async (element) => {
-  const { table: tableName, factor_field, outcome_field, statistic } = element;
-  const tbl = Table.findOne({ name: tableName });
-  if (!tbl) throw new Error(`Table not found: ${tableName}`);
-
-  if (typeof tbl.aggregationQuery === "function") {
-    const agg = isCountStat(statistic)
-      ? { aggregate: "count" }
-      : { field: outcome_field, aggregate: statToAggregate(statistic) };
-    const rows = await tbl.aggregationQuery(
-      { __val: agg },
-      { where: {}, groupBy: [factor_field] },
-    );
-    return rows.map((r) => ({
-      name: r[factor_field] != null ? String(r[factor_field]) : "null",
-      value: r.__val ?? 0,
-    }));
-  }
-};
 
 const pivotAggregatorName = (statistic) => {
   switch (statistic) {
@@ -43,32 +20,24 @@ const pivotAggregatorName = (statistic) => {
   }
 };
 
-const renderPieChart = (element, data) => {
-  const divId = `llm_dash_${element.name}`;
-  const pieData = JSON.stringify(data);
-  const titleOption = element.title
-    ? `title: { text: ${JSON.stringify(element.title)}, left: 'center' },`
-    : "";
-  const radius = element.pie_donut ? "['40%', '70%']" : "'70%'";
-
-  return div(
-    { class: "llm-dashboard-element mb-3" },
-    div({ id: divId, style: "width:100%;height:400px;" }),
-    script(
-      domReady(`
-var myChart = echarts.init(document.getElementById(${JSON.stringify(divId)}));
-console.log("Rendering pie chart with data:", ${pieData}, {myChart});
-myChart.setOption({
-  ${titleOption}
-  series: [{
-    type: 'pie',
-    radius: ${radius},
-    label: { position: 'inside', formatter: '{b}\\n{c} ({d}%)' },
-    data: ${pieData}
-  }]
-});`),
-    ),
-  );
+const renderPieElement = async (element, state, req) => {
+  const tbl = Table.findOne({ name: element.table });
+  if (!tbl) throw new Error(`Table not found: ${element.table}`);
+  const html = await new View({
+    viewtemplate: "Chart",
+    table_id: tbl.id,
+    name: `llm_dash_${element.name}`,
+    min_role: 1,
+    configuration: {
+      plot_type: "pie",
+      factor_field: element.factor_field,
+      outcome_field: element.outcome_field || "Row count",
+      statistic: element.statistic || "Count",
+      pie_donut: !!element.pie_donut,
+      title: element.title,
+    },
+  }).run(state, { req });
+  return div({ class: "mb-3" }, html);
 };
 
 const renderPivotTable = async (element) => {
@@ -89,9 +58,10 @@ const renderPivotTable = async (element) => {
 
   const firstCol = columns?.[0];
   const aggregatorName = pivotAggregatorName(firstCol?.statistic);
-  // console.log({ aggregatorName });
   const vals =
-    !isCountStat(firstCol?.statistic) && firstCol?.field !== "Row count"
+    firstCol?.statistic !== "Count" &&
+    firstCol?.statistic != null &&
+    firstCol?.field !== "Row count"
       ? [firstCol.field]
       : [];
 
@@ -107,7 +77,7 @@ const renderPivotTable = async (element) => {
   const divId = `llm_pivot_${element.name}_${rndid}`;
 
   return div(
-    { class: "llm-dashboard-element mb-3" },
+    { class: "mb-3" },
     element.title ? h6({ class: "fw-semibold mb-2" }, element.title) : "",
     div({ id: divId }),
     script(
@@ -123,10 +93,9 @@ $("#${divId}").pivotUI(${JSON.stringify(rowData)}, {
   );
 };
 
-const renderElement = async (element) => {
+const renderElement = async (element, state, req) => {
   if (element.type === "piechart") {
-    const data = await loadPieData(element);
-    return renderPieChart(element, data);
+    return await renderPieElement(element, state, req);
   }
   if (element.type === "pivot_table") {
     return await renderPivotTable(element);
@@ -395,7 +364,7 @@ const run = async (table_id, viewname, cfg, state, { req }) => {
   const elementMap = {};
   for (const element of elements) {
     try {
-      elementMap[element.name] = await renderElement(element);
+      elementMap[element.name] = await renderElement(element, state, req);
     } catch (e) {
       elementMap[element.name] = div(
         { class: "alert alert-danger" },

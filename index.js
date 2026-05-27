@@ -1,26 +1,8 @@
 module.exports = {
   sc_plugin_api_version: 1,
   plugin_name: "llm-dashboard",
-  dependencies: ["@saltcorn/large-language-model"],
+  dependencies: ["@saltcorn/large-language-model", "@saltcorn/pivottable"],
   headers: [
-    {
-      script: `/plugins/public/llm-dashboard@${
-        require("./package.json").version
-      }/echarts.min.js`,
-      onlyViews: ["LLM Dashboard"],
-    },
-    {
-      script: `/plugins/public/llm-dashboard@${
-        require("./package.json").version
-      }/jquery-ui.min.js`,
-      onlyViews: ["LLM Dashboard"],
-    },
-    {
-      css: `/plugins/public/llm-dashboard@${
-        require("./package.json").version
-      }/jquery-ui.min.css`,
-      onlyViews: ["LLM Dashboard"],
-    },
     {
       script: `/plugins/public/llm-dashboard@${
         require("./package.json").version
