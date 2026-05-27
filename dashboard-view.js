@@ -231,24 +231,26 @@ const layoutTool = {
   function: {
     name: "create_dashboard_layout",
     description:
-      "Arrange the dashboard elements using besides (side-by-side) or above (stacked). Items are element name strings.",
+      "Arrange dashboard elements in a nested layout. Each node is either a string (element name), {besides: [...nodes]} for side-by-side columns, or {above: [...nodes]} for vertical stacking. Nodes nest freely, e.g. {above: [{besides: ['chart1', 'chart2']}, 'table1']}.",
     parameters: {
       type: "object",
       properties: {
         layout: {
-          type: "object",
           description:
-            "Layout node: {besides: [...]} for side-by-side or {above: [...]} for stacked. Items are element name strings.",
+            "Root layout node. Either a string element name, {besides: [...nodes]} for side-by-side, or {above: [...nodes]} for stacked. Each node in the arrays can itself be a string or another {besides}/{above} object, allowing arbitrary nesting.",
+          type: "object",
           properties: {
             besides: {
               type: "array",
-              items: { type: "string" },
-              description: "Element names to show side by side",
+              description:
+                "Nodes to show side by side. Each item is a string element name or a nested {besides}/{above} node.",
+              items: {},
             },
             above: {
               type: "array",
-              items: { type: "string" },
-              description: "Element names to show stacked vertically",
+              description:
+                "Nodes to stack vertically. Each item is a string element name or a nested {besides}/{above} node.",
+              items: {},
             },
           },
         },
@@ -327,9 +329,14 @@ Use statistic "Count" and outcome_field "Row count" when counting rows.`;
 
       // Step2, generate layout
       const elementNames = elements.map((e) => e.name);
-      const layoutPrompt = `Arrange these dashboard elements using a besides (side-by-side) or above (stacked) layout.
+      const layoutPrompt = `Arrange these dashboard elements in a nested layout using besides (side-by-side) and above (stacked) nodes.
 
 Element names: ${elementNames.join(", ")}
+
+Rules:
+- A node is either a string (element name), {besides: [...nodes]}, or {above: [...nodes]}.
+- Nodes nest freely. For example, to put two charts side by side above a table: {above: [{besides: ["chart1", "chart2"]}, "table1"]}.
+- Use besides for charts that belong together visually; use above to separate different sections.
 
 Original user request: ${prompt}
 
