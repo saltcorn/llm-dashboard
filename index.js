@@ -1,7 +1,7 @@
 module.exports = {
   sc_plugin_api_version: 1,
   plugin_name: "llm-dashboard",
-  dependencies: ["@saltcorn/large-language-model", "@saltcorn/pivottable"],
+  dependencies: ["@saltcorn/large-language-model", "@saltcorn/charts"],
   headers: [
     {
       script: `/plugins/public/llm-dashboard@${
