@@ -20,7 +20,7 @@ const pivotAggregatorName = (statistic) => {
   }
 };
 
-const renderPieElement = async (element, state, req) => {
+const renderChartElement = async (element, state, req, configuration) => {
   const tbl = Table.findOne({ name: element.table });
   if (!tbl) throw new Error(`Table not found: ${element.table}`);
   const html = await new View({
@@ -28,17 +28,88 @@ const renderPieElement = async (element, state, req) => {
     table_id: tbl.id,
     name: `llm_dash_${element.name}`,
     min_role: 1,
-    configuration: {
-      plot_type: "pie",
-      factor_field: element.factor_field,
-      outcome_field: element.outcome_field || "Row count",
-      statistic: element.statistic || "Count",
-      pie_donut: !!element.pie_donut,
-      title: element.title,
-    },
+    configuration: { title: element.title, ...configuration },
   }).run(state, { req });
   return div({ class: "mb-3" }, html);
 };
+
+const renderPieElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "pie",
+    factor_field: element.factor_field,
+    outcome_field: element.outcome_field || "Row count",
+    statistic: element.statistic || "Count",
+    pie_donut: !!element.pie_donut,
+  });
+
+const renderLineElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "line",
+    plot_series: "single",
+    x_field: element.x_field,
+    y_field: element.y_field,
+    smooth: !!element.smooth,
+  });
+
+const renderBarElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "bar",
+    factor_field: element.factor_field,
+    outcomes: [{ outcome_field: element.outcome_field || "Row count" }],
+    statistic: element.statistic || "Count",
+    bar_orientation: element.bar_orientation || "vertical",
+  });
+
+const renderScatterElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "scatter",
+    plot_series: "single",
+    x_field: element.x_field,
+    y_field: element.y_field,
+  });
+
+const renderHistogramElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "histogram",
+    histogram_field: element.histogram_field,
+  });
+
+const renderAreaElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "area",
+    plot_series: "single",
+    x_field: element.x_field,
+    y_field: element.y_field,
+    smooth: !!element.smooth,
+  });
+
+const renderFunnelElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "funnel",
+    factor_field: element.factor_field,
+    outcome_field: element.outcome_field || "Row count",
+    statistic: element.statistic || "Count",
+  });
+
+const renderGaugeElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "gauge",
+    outcome_field: element.outcome_field || "Row count",
+    statistic: element.statistic || "Count",
+    gauge_type: "single",
+    gauge_style: element.gauge_style || "arcs",
+    gauge_name: element.gauge_name,
+    gauge_min: element.gauge_min,
+    gauge_max: element.gauge_max,
+  });
+
+const renderHeatmapElement = (element, state, req) =>
+  renderChartElement(element, state, req, {
+    plot_type: "heatmap",
+    heatmap_x_field: element.heatmap_x_field,
+    heatmap_y_field: element.heatmap_y_field,
+    heatmap_value_field: element.heatmap_value_field || "Row count",
+  });
 
 const renderPivotTable = async (element) => {
   const { table: tableName, row_field, columns } = element;
@@ -94,16 +165,33 @@ $("#${divId}").pivotUI(${JSON.stringify(rowData)}, {
 };
 
 const renderElement = async (element, state, req) => {
-  if (element.type === "piechart") {
-    return await renderPieElement(element, state, req);
+  switch (element.type) {
+    case "piechart":
+      return await renderPieElement(element, state, req);
+    case "linechart":
+      return await renderLineElement(element, state, req);
+    case "barchart":
+      return await renderBarElement(element, state, req);
+    case "scatterchart":
+      return await renderScatterElement(element, state, req);
+    case "histogram":
+      return await renderHistogramElement(element, state, req);
+    case "areachart":
+      return await renderAreaElement(element, state, req);
+    case "funnel":
+      return await renderFunnelElement(element, state, req);
+    case "gauge":
+      return await renderGaugeElement(element, state, req);
+    case "heatmap":
+      return await renderHeatmapElement(element, state, req);
+    case "pivot_table":
+      return await renderPivotTable(element);
+    default:
+      return div(
+        { class: "alert alert-warning" },
+        `Unknown element type: ${element.type}`,
+      );
   }
-  if (element.type === "pivot_table") {
-    return await renderPivotTable(element);
-  }
-  return div(
-    { class: "alert alert-warning" },
-    `Unknown element type: ${element.type}`,
-  );
 };
 
 const renderLayout = (node, elementMap) => {
@@ -145,7 +233,7 @@ const elementsTool = {
   function: {
     name: "create_dashboard_elements",
     description:
-      "Create the array of dashboard elements. Each element is either a piechart or a pivot_table.",
+      "Create the array of dashboard elements. Supported types: piechart, linechart, barchart, scatterchart, histogram, pivot_table.",
     parameters: {
       type: "object",
       properties: {
@@ -160,7 +248,18 @@ const elementsTool = {
               },
               type: {
                 type: "string",
-                enum: ["piechart", "pivot_table"],
+                enum: [
+                  "piechart",
+                  "linechart",
+                  "areachart",
+                  "barchart",
+                  "scatterchart",
+                  "histogram",
+                  "funnel",
+                  "gauge",
+                  "heatmap",
+                  "pivot_table",
+                ],
               },
               table: {
                 type: "string",
@@ -170,27 +269,90 @@ const elementsTool = {
                 type: "string",
                 description: "Optional display title shown above the element",
               },
-              // piechart fields
+              // piechart / barchart shared fields
               factor_field: {
                 type: "string",
                 description:
-                  "piechart only – categorical field whose distinct values become pie slices",
+                  "piechart/barchart – categorical field whose distinct values become slices or bars",
               },
               outcome_field: {
                 type: "string",
                 description:
-                  "piechart only – numeric field to aggregate; use 'Row count' for Count",
+                  "piechart/barchart – numeric field to aggregate; use 'Row count' to count rows",
               },
               statistic: {
                 type: "string",
                 enum: ["Count", "Sum", "Avg", "Max", "Min"],
                 description:
-                  "piechart only – aggregation applied to outcome_field",
+                  "piechart/barchart – aggregation applied to outcome_field",
               },
+              // piechart-only
               pie_donut: {
                 type: "boolean",
+                description: "piechart only – render as a donut chart",
+              },
+              // barchart-only
+              bar_orientation: {
+                type: "string",
+                enum: ["vertical", "horizontal"],
                 description:
-                  "piechart only – render as a donut chart instead of pie",
+                  "barchart only – bar direction (default: vertical)",
+              },
+              // linechart / areachart / scatterchart shared fields
+              x_field: {
+                type: "string",
+                description:
+                  "linechart/areachart/scatterchart – field mapped to the X axis",
+              },
+              y_field: {
+                type: "string",
+                description:
+                  "linechart/areachart/scatterchart – field mapped to the Y axis",
+              },
+              // linechart / areachart shared
+              smooth: {
+                type: "boolean",
+                description: "linechart/areachart only – draw a smoothed curve",
+              },
+              // histogram-only
+              histogram_field: {
+                type: "string",
+                description:
+                  "histogram only – numeric field whose distribution is plotted",
+              },
+              // gauge-only
+              gauge_name: {
+                type: "string",
+                description: "gauge only – label shown on the gauge needle/arc",
+              },
+              gauge_min: {
+                type: "number",
+                description: "gauge only – minimum value of the scale",
+              },
+              gauge_max: {
+                type: "number",
+                description: "gauge only – maximum value of the scale",
+              },
+              gauge_style: {
+                type: "string",
+                enum: ["arcs", "pointer"],
+                description: "gauge only – visual style (default: arcs)",
+              },
+              // heatmap-only
+              heatmap_x_field: {
+                type: "string",
+                description:
+                  "heatmap only – categorical field for the X axis of the grid",
+              },
+              heatmap_y_field: {
+                type: "string",
+                description:
+                  "heatmap only – categorical field for the Y axis of the grid",
+              },
+              heatmap_value_field: {
+                type: "string",
+                description:
+                  "heatmap only – numeric field whose value drives cell colour; use 'Row count' to count rows",
               },
               // pivot_table fields
               row_field: {
@@ -308,7 +470,18 @@ ${schemaContext}
 User request: ${prompt}
 
 Generate the dashboard elements as a tool call. Use only table and field names that exist in the schema above.
-For pie charts: factor_field is the categorical field (the wedges), outcome_field is the numeric field to aggregate.
+
+Chart type guidance:
+- piechart: factor_field = categorical field (the slices), outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation.
+- barchart: factor_field = categorical axis, outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation.
+- linechart: x_field = horizontal axis field (can be a Date or numeric field), y_field = a numeric field that already exists on each row. IMPORTANT: line charts plot raw row values — they do NOT aggregate. Do not use them for "count over time" or any aggregated metric; use barchart for those.
+- areachart: same as linechart — raw row values only, no aggregation. Use for continuous numeric data where you want the area under the line filled.
+- scatterchart: x_field + y_field = two numeric fields to compare as a scatter plot.
+- histogram: histogram_field = a single numeric field whose distribution to plot.
+- funnel: factor_field = stage/category field, outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Best for pipeline or conversion data ordered from largest to smallest.
+- gauge: outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Shows a single KPI value on a dial. Optionally set gauge_min, gauge_max, gauge_name, gauge_style ("arcs" or "pointer").
+- heatmap: heatmap_x_field + heatmap_y_field = two categorical fields that form the grid axes, heatmap_value_field = numeric cell value (or "Row count").
+- pivot_table: row_field = field to group rows by, columns = list of {field, statistic} aggregations.
 Use statistic "Count" and outcome_field "Row count" when counting rows.`;
 
       const elementsResult = await llmFn.run(elementsPrompt, {
@@ -320,7 +493,6 @@ Use statistic "Count" and outcome_field "Row count" when counting rows.`;
       });
 
       const elements = extractToolResult(elementsResult, "elements");
-      // console.log({ elements });
       if (!elements?.length) {
         throw new Error(
           "LLM did not return dashboard elements. Check your prompt or LLM configuration.",
