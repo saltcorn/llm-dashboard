@@ -38,7 +38,7 @@ const renderChartElement = async (element, state, req, configuration) => {
     viewtemplate: "Chart",
     table_id: tbl.id,
     name: `llm_dash_${element.name}`,
-    min_role: 1,
+    min_role: 100,
     configuration: { title: element.title, ...configuration },
   }).run(state, { req });
   return div({ class: "mb-3" }, html);
