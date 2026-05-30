@@ -131,6 +131,7 @@ const renderPivotTable = async (element) => {
     col_fields,
     value_field,
     statistic,
+    renderer,
     // legacy support
     row_field,
     columns,
@@ -140,18 +141,21 @@ const renderPivotTable = async (element) => {
 
   const rows = row_fields ?? (row_field ? [row_field] : []);
   const cols = col_fields ?? [];
-  const aggregatorName = pivotAggregatorName(statistic ?? columns?.[0]?.statistic);
+  const aggregatorName = pivotAggregatorName(
+    statistic ?? columns?.[0]?.statistic,
+  );
   const resolvedValueField = value_field ?? columns?.[0]?.field;
   const vals =
     resolvedValueField && resolvedValueField !== "Row count"
       ? [resolvedValueField]
       : [];
 
-  const fieldNames = [
-    ...rows,
-    ...cols,
-    ...vals,
-  ].filter(Boolean);
+  const explicitFields = [...rows, ...cols, ...vals].filter(Boolean);
+  let fieldNames = explicitFields;
+  if (!fieldNames.length) {
+    const fields = await tbl.getFields();
+    fieldNames = fields.map((f) => f.name);
+  }
 
   const allRows = await tbl.getRows({});
   const rowData = allRows.map((r) => {
@@ -160,6 +164,7 @@ const renderPivotTable = async (element) => {
     return obj;
   });
 
+  const rendererName = renderer || "Table";
   const pivotCfg = JSON.stringify({ rows, cols, aggregatorName, vals });
 
   const rndid = Math.floor(Math.random() * 16777215).toString(16);
@@ -171,7 +176,9 @@ const renderPivotTable = async (element) => {
     div({ id: divId }),
     script(
       domReady(`
-$("#${divId}").pivot(${JSON.stringify(rowData)}, ${pivotCfg});`),
+var _cfg${rndid} = ${pivotCfg};
+_cfg${rndid}.renderer = ($.pivotUtilities.renderers || {})[${JSON.stringify(rendererName)}] || $.pivotUtilities.renderers["Table"];
+$("#${divId}").pivot(${JSON.stringify(rowData)}, _cfg${rndid});`),
     ),
   );
 };
@@ -378,6 +385,11 @@ const elementsTool = {
                 description:
                   "pivot_table only – numeric field to aggregate in cells; use 'Row count' to count rows",
               },
+              renderer: {
+                type: "string",
+                description:
+                  "pivot_table only – PivotTable.js renderer name (default: 'Table'). Examples: 'Table', 'Table Barchart', 'Heatmap', 'Row Heatmap', 'Col Heatmap'. Choose based on the user's requested display style.",
+              },
             },
             required: ["name", "type", "table"],
           },
@@ -440,7 +452,7 @@ const CHART_TYPE_GUIDANCE = [
   '- funnel: factor_field = stage/category field, outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Best for pipeline or conversion data ordered from largest to smallest.',
   '- gauge: outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Shows a single KPI value on a dial. Optionally set gauge_min, gauge_max, gauge_name, gauge_style ("arcs" or "pointer").',
   '- heatmap: heatmap_x_field + heatmap_y_field = two categorical fields that form the grid axes, heatmap_value_field = numeric cell value (or "Row count").',
-  "- pivot_table: row_fields = array of fields on the left axis (always include the main grouping field here), col_fields = array of fields on the top axis (use when a categorical field makes sense as column headers, e.g. status or category), value_field = numeric field to aggregate in cells (or 'Row count'), statistic = aggregation. Place fields the user explicitly mentions: categorical ones on row_fields by default, only move a field to col_fields if it has few distinct values and makes sense as column headers.",
+  "- pivot_table: row_fields = array of fields on the left axis, col_fields = array of fields on the top axis (use a field with few distinct values, e.g. status or category), value_field = numeric field to aggregate (or 'Row count'), statistic = aggregation, renderer = display style ('Table' default; also 'Table Barchart', 'Heatmap', 'Row Heatmap', 'Col Heatmap'). If the user does not name specific fields, omit row_fields and col_fields — all table fields are included automatically. When fields are given: put high-cardinality categorical fields on row_fields, low-cardinality ones on col_fields. Pick renderer based on the user's requested display.",
   'Use statistic "Count" and outcome_field "Row count" when counting rows.',
 ].join("\n");
 
@@ -774,7 +786,11 @@ const run = async (_table_id, viewname, cfg, state, { req }) => {
   const userId = req?.user?.id;
   const showUserBar = !!(allow_user_dashboards && userId);
   const userDashes = showUserBar
-    ? await MetaData.find({ type: "llm_dashboard", name: viewname, user_id: userId })
+    ? await MetaData.find({
+        type: "llm_dashboard",
+        name: viewname,
+        user_id: userId,
+      })
     : [];
 
   // Resolve which dashboard to render
@@ -815,9 +831,7 @@ const run = async (_table_id, viewname, cfg, state, { req }) => {
     ? renderUserBar(viewname, activeDash, userDashes, activePrompt)
     : "";
 
-  const titleEl = title
-    ? h3({ class: "mb-3 fw-semibold" }, title)
-    : "";
+  const titleEl = title ? h3({ class: "mb-3 fw-semibold" }, title) : "";
   return div({ class: "container-fluid pb-4" }, titleEl, content) + bar;
 };
 
@@ -880,7 +894,11 @@ const delete_user_dashboard = async (
   const id = parseInt(body.id, 10);
   if (isNaN(id)) return { json: { error: "Invalid id" } };
 
-  const record = await MetaData.findOne({ id, user_id: userId, name: viewname });
+  const record = await MetaData.findOne({
+    id,
+    user_id: userId,
+    name: viewname,
+  });
   if (!record) return { json: { error: "Dashboard not found" } };
 
   await record.delete();
