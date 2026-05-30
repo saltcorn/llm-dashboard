@@ -2,11 +2,13 @@ const Workflow = require("@saltcorn/data/models/workflow");
 const Form = require("@saltcorn/data/models/form");
 const Table = require("@saltcorn/data/models/table");
 const View = require("@saltcorn/data/models/view");
+const MetaData = require("@saltcorn/data/models/metadata");
 const { getState } = require("@saltcorn/data/db/state");
 const {
   div,
   script,
   domReady,
+  h3,
   h6,
   button,
   select,
@@ -123,14 +125,34 @@ const renderHeatmapElement = (element, state, req) =>
   });
 
 const renderPivotTable = async (element) => {
-  const { table: tableName, row_field, columns } = element;
+  const {
+    table: tableName,
+    row_fields,
+    col_fields,
+    value_field,
+    statistic,
+    // legacy support
+    row_field,
+    columns,
+  } = element;
   const tbl = Table.findOne({ name: tableName });
   if (!tbl) throw new Error(`Table not found: ${tableName}`);
 
+  const rows = row_fields ?? (row_field ? [row_field] : []);
+  const cols = col_fields ?? [];
+  const aggregatorName = pivotAggregatorName(statistic ?? columns?.[0]?.statistic);
+  const resolvedValueField = value_field ?? columns?.[0]?.field;
+  const vals =
+    resolvedValueField && resolvedValueField !== "Row count"
+      ? [resolvedValueField]
+      : [];
+
   const fieldNames = [
-    row_field,
-    ...columns.map((c) => c.field).filter((f) => f && f !== "Row count"),
-  ];
+    ...rows,
+    ...cols,
+    ...vals,
+  ].filter(Boolean);
+
   const allRows = await tbl.getRows({});
   const rowData = allRows.map((r) => {
     const obj = {};
@@ -138,22 +160,7 @@ const renderPivotTable = async (element) => {
     return obj;
   });
 
-  const firstCol = columns?.[0];
-  const aggregatorName = pivotAggregatorName(firstCol?.statistic);
-  const vals =
-    firstCol?.statistic !== "Count" &&
-    firstCol?.statistic != null &&
-    firstCol?.field !== "Row count"
-      ? [firstCol.field]
-      : [];
-
-  const pivotCfg = JSON.stringify({
-    rows: [row_field],
-    cols: [],
-    aggregatorName,
-    vals,
-    showUI: true,
-  });
+  const pivotCfg = JSON.stringify({ rows, cols, aggregatorName, vals });
 
   const rndid = Math.floor(Math.random() * 16777215).toString(16);
   const divId = `llm_pivot_${element.name}_${rndid}`;
@@ -164,13 +171,7 @@ const renderPivotTable = async (element) => {
     div({ id: divId }),
     script(
       domReady(`
-const renderers_${rndid} = window.Plotly
-  ? $.extend($.pivotUtilities.renderers, $.pivotUtilities.plotly_renderers)
-  : $.pivotUtilities.renderers;
-$("#${divId}").pivotUI(${JSON.stringify(rowData)}, {
-  ...${pivotCfg},
-  renderers: renderers_${rndid},
-});`),
+$("#${divId}").pivot(${JSON.stringify(rowData)}, ${pivotCfg});`),
     ),
   );
 };
@@ -360,28 +361,22 @@ const elementsTool = {
                 description:
                   "heatmap only – numeric field whose value drives cell colour; use 'Row count' to count rows",
               },
-              row_field: {
-                type: "string",
-                description: "pivot_table only – field to group rows by",
-              },
-              columns: {
+              row_fields: {
                 type: "array",
-                description: "pivot_table only – aggregated columns to show",
-                items: {
-                  type: "object",
-                  properties: {
-                    field: {
-                      type: "string",
-                      description:
-                        "Field to aggregate; use 'id' for a row count",
-                    },
-                    statistic: {
-                      type: "string",
-                      enum: ["Count", "Sum", "Avg", "Max", "Min"],
-                    },
-                  },
-                  required: ["field", "statistic"],
-                },
+                items: { type: "string" },
+                description:
+                  "pivot_table only – fields placed on the left (row) axis of the pivot table",
+              },
+              col_fields: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "pivot_table only – fields placed on the top (column) axis of the pivot table (optional; leave empty to show all rows flat)",
+              },
+              value_field: {
+                type: "string",
+                description:
+                  "pivot_table only – numeric field to aggregate in cells; use 'Row count' to count rows",
               },
             },
             required: ["name", "type", "table"],
@@ -445,7 +440,7 @@ const CHART_TYPE_GUIDANCE = [
   '- funnel: factor_field = stage/category field, outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Best for pipeline or conversion data ordered from largest to smallest.',
   '- gauge: outcome_field = numeric to aggregate (or "Row count"), statistic = aggregation. Shows a single KPI value on a dial. Optionally set gauge_min, gauge_max, gauge_name, gauge_style ("arcs" or "pointer").',
   '- heatmap: heatmap_x_field + heatmap_y_field = two categorical fields that form the grid axes, heatmap_value_field = numeric cell value (or "Row count").',
-  "- pivot_table: row_field = field to group rows by, columns = list of {field, statistic} aggregations.",
+  "- pivot_table: row_fields = array of fields on the left axis (always include the main grouping field here), col_fields = array of fields on the top axis (use when a categorical field makes sense as column headers, e.g. status or category), value_field = numeric field to aggregate in cells (or 'Row count'), statistic = aggregation. Place fields the user explicitly mentions: categorical ones on row_fields by default, only move a field to col_fields if it has few distinct values and makes sense as column headers.",
   'Use statistic "Count" and outcome_field "Row count" when counting rows.',
 ].join("\n");
 
@@ -527,6 +522,12 @@ const configuration_workflow = () =>
           new Form({
             fields: [
               {
+                name: "title",
+                label: "Dashboard title",
+                sublabel: "Displayed at the top of the dashboard.",
+                type: "String",
+              },
+              {
                 name: "prompt",
                 label: "Dashboard description",
                 sublabel:
@@ -596,10 +597,10 @@ const renderUserBar = (viewname, activeDash, userDashes, activePrompt) => {
       { value: "admin", ...(activeDash === "admin" && { selected: true }) },
       "Default (Admin)",
     ),
-    ...userDashes.map((d, i) =>
+    ...userDashes.map((d) =>
       option(
-        { value: i, ...(activeDash === i && { selected: true }) },
-        d.label || `Dashboard ${i + 1}`,
+        { value: d.id, ...(activeDash === d.id && { selected: true }) },
+        d.body.label || `Dashboard ${d.id}`,
       ),
     ),
   );
@@ -682,7 +683,7 @@ const renderUserBar = (viewname, activeDash, userDashes, activePrompt) => {
 </div>`;
 
   const js = script(`
-var _llmDashEditIndex = null;
+var _llmDashEditId = null;
 var _llmDashViewname = ${JSON.stringify(viewname)};
 
 function llmDashSwitch(val) {
@@ -692,15 +693,15 @@ function llmDashSwitch(val) {
 }
 
 function llmDashNew() {
-  _llmDashEditIndex = null;
+  _llmDashEditId = null;
   document.getElementById('llmDashModalLabel').textContent = 'New Dashboard';
   document.getElementById('llmDashPromptInput').value = '';
   document.getElementById('llmDashModalError').classList.add('d-none');
   new bootstrap.Modal(document.getElementById('llmDashModal')).show();
 }
 
-function llmDashEdit(idx, prompt) {
-  _llmDashEditIndex = idx;
+function llmDashEdit(id, prompt) {
+  _llmDashEditId = id;
   document.getElementById('llmDashModalLabel').textContent = 'Edit Dashboard';
   document.getElementById('llmDashPromptInput').value = prompt || '';
   document.getElementById('llmDashModalError').classList.add('d-none');
@@ -715,7 +716,7 @@ function llmDashSubmit() {
   spinner.classList.remove('d-none');
   btn.disabled = true;
   var body = { prompt: prompt };
-  if (_llmDashEditIndex !== null) body.index = _llmDashEditIndex;
+  if (_llmDashEditId !== null) body.id = _llmDashEditId;
   view_post(_llmDashViewname, 'save_user_dashboard', body, function(res) {
     spinner.classList.add('d-none');
     btn.disabled = false;
@@ -726,14 +727,14 @@ function llmDashSubmit() {
       return;
     }
     var url = new URL(window.location.href);
-    url.searchParams.set('active_user_dash', res.index);
+    url.searchParams.set('active_user_dash', res.id);
     window.location.href = url.toString();
   });
 }
 
-function llmDashDelete(idx) {
+function llmDashDelete(id) {
   if (!confirm('Delete this dashboard?')) return;
-  view_post(_llmDashViewname, 'delete_user_dashboard', { index: idx }, function(res) {
+  view_post(_llmDashViewname, 'delete_user_dashboard', { id: id }, function(res) {
     if (res.error) { alert(res.error); return; }
     var url = new URL(window.location.href);
     url.searchParams.set('active_user_dash', 'admin');
@@ -760,20 +761,21 @@ const renderDashboard = async (elements, layout, state, req) => {
   return renderLayout(layout, elementMap);
 };
 
-const get_state_fields = (table_id, viewname, cfg) => {
+const get_state_fields = (_table_id, _viewname, cfg) => {
   if (cfg?.allow_user_dashboards) {
     return [{ name: "active_user_dash", type: "String", show_in_menu: false }];
   }
   return [];
 };
 
-const run = async (table_id, viewname, cfg, state, { req }) => {
-  const { elements, layout, allow_user_dashboards, user_dashboards } =
-    cfg || {};
+const run = async (_table_id, viewname, cfg, state, { req }) => {
+  const { elements, layout, allow_user_dashboards, title } = cfg || {};
 
   const userId = req?.user?.id;
   const showUserBar = !!(allow_user_dashboards && userId);
-  const userDashes = (showUserBar && user_dashboards?.[userId]) || [];
+  const userDashes = showUserBar
+    ? await MetaData.find({ type: "llm_dashboard", name: viewname, user_id: userId })
+    : [];
 
   // Resolve which dashboard to render
   let activeElements = elements;
@@ -786,13 +788,13 @@ const run = async (table_id, viewname, cfg, state, { req }) => {
     state.active_user_dash != null &&
     state.active_user_dash !== "admin"
   ) {
-    const idx = parseInt(state.active_user_dash, 10);
-    const userDash = !isNaN(idx) && userDashes[idx];
+    const id = parseInt(state.active_user_dash, 10);
+    const userDash = !isNaN(id) && userDashes.find((d) => d.id === id);
     if (userDash) {
-      activeElements = userDash.elements;
-      activeLayout = userDash.layout;
-      activeDash = idx;
-      activePrompt = userDash.prompt || null;
+      activeElements = userDash.body.elements;
+      activeLayout = userDash.body.layout;
+      activeDash = id;
+      activePrompt = userDash.body.prompt || null;
     }
   }
 
@@ -813,11 +815,14 @@ const run = async (table_id, viewname, cfg, state, { req }) => {
     ? renderUserBar(viewname, activeDash, userDashes, activePrompt)
     : "";
 
-  return div({ class: "container-fluid pb-4" }, content) + bar;
+  const titleEl = title
+    ? h3({ class: "mb-3 fw-semibold" }, title)
+    : "";
+  return div({ class: "container-fluid pb-4" }, titleEl, content) + bar;
 };
 
 const save_user_dashboard = async (
-  table_id,
+  _table_id,
   viewname,
   config,
   body,
@@ -827,7 +832,7 @@ const save_user_dashboard = async (
   if (!userId) return { json: { error: "Must be logged in" } };
   if (!config.allow_user_dashboards) return { json: { error: "Not allowed" } };
 
-  const { prompt, index: editIndex } = body;
+  const { prompt, id: editId } = body;
   if (!prompt) return { json: { error: "Prompt is required" } };
 
   let generated;
@@ -837,35 +842,32 @@ const save_user_dashboard = async (
     return { json: { error: e.message } };
   }
 
-  const view = await View.findOne({ name: viewname });
-  const existingByUser = { ...(view.configuration.user_dashboards || {}) };
-  const userDashes = [...(existingByUser[userId] || [])];
-  const dashEntry = { label: prompt.slice(0, 60), prompt, ...generated };
+  const dashBody = { label: prompt.slice(0, 60), prompt, ...generated };
+  const parsedId = editId != null ? parseInt(editId, 10) : NaN;
 
-  let newIndex;
-  const parsedEdit = editIndex != null ? parseInt(editIndex, 10) : NaN;
-  if (!isNaN(parsedEdit) && parsedEdit >= 0 && parsedEdit < userDashes.length) {
-    userDashes[parsedEdit] = dashEntry;
-    newIndex = parsedEdit;
-  } else {
-    userDashes.push(dashEntry);
-    newIndex = userDashes.length - 1;
+  let savedId;
+  if (!isNaN(parsedId)) {
+    const existing = await MetaData.findOne({ id: parsedId, user_id: userId });
+    if (existing) {
+      await existing.update({ body: dashBody });
+      savedId = parsedId;
+    }
+  }
+  if (savedId == null) {
+    const record = await MetaData.create({
+      type: "llm_dashboard",
+      name: viewname,
+      user_id: userId,
+      body: dashBody,
+    });
+    savedId = record.id;
   }
 
-  existingByUser[userId] = userDashes;
-  await View.update(
-    {
-      configuration: { ...view.configuration, user_dashboards: existingByUser },
-    },
-    view.id,
-  );
-  await getState().refresh_views();
-
-  return { json: { success: true, index: newIndex } };
+  return { json: { success: true, id: savedId } };
 };
 
 const delete_user_dashboard = async (
-  table_id,
+  _table_id,
   viewname,
   config,
   body,
@@ -875,24 +877,13 @@ const delete_user_dashboard = async (
   if (!userId) return { json: { error: "Must be logged in" } };
   if (!config.allow_user_dashboards) return { json: { error: "Not allowed" } };
 
-  const idx = parseInt(body.index, 10);
-  const view = await View.findOne({ name: viewname });
-  const existingByUser = { ...(view.configuration.user_dashboards || {}) };
-  const userDashes = [...(existingByUser[userId] || [])];
+  const id = parseInt(body.id, 10);
+  if (isNaN(id)) return { json: { error: "Invalid id" } };
 
-  if (isNaN(idx) || idx < 0 || idx >= userDashes.length)
-    return { json: { error: "Invalid index" } };
+  const record = await MetaData.findOne({ id, user_id: userId, name: viewname });
+  if (!record) return { json: { error: "Dashboard not found" } };
 
-  userDashes.splice(idx, 1);
-  existingByUser[userId] = userDashes;
-  await View.update(
-    {
-      configuration: { ...view.configuration, user_dashboards: existingByUser },
-    },
-    view.id,
-  );
-  await getState().refresh_views();
-
+  await record.delete();
   return { json: { success: true } };
 };
 
